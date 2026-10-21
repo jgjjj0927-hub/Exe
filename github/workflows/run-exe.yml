@@ -1,0 +1,17 @@
+name: Run EXE
+on: [push, workflow_dispatch]
+
+jobs:
+  run:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run executable
+        shell: powershell
+        run: |
+          $exePath = '.\your.exe'
+          $process = Start-Process -FilePath $exePath -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput out.txt -RedirectStandardError err.txt
+          Get-Content out.txt
+          if ($process.ExitCode -ne 0) { Get-Content err.txt; throw "Exit code: $($process.ExitCode)" }

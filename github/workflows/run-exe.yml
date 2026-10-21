@@ -4,14 +4,68 @@ on: [push, workflow_dispatch]
 jobs:
   run:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run executable
+      - name: Inspect environment
         shell: powershell
         run: |
-          $exePath = '.\your.exe'
-          $process = Start-Process -FilePath $exePath -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput out.txt -RedirectStandardError err.txt
-          Get-Content out.txt
-          if ($process.ExitCode -ne 0) { Get-Content err.txt; throw "Exit code: $($process.ExitCode)" }
+          Write-Host "=== PWD ==="
+          Get-Location
+          Write-Host "=== Repo files (root) ==="
+          Get-ChildItem -Force | Select-Object Name, Length
+          Write-Host "=== Searching for exe ==="
+          Get-ChildItem -Recurse -Filter *.exe -ErrorAction SilentlyContinue | Select-Object FullName, Length
+
+      - name: Locate CatCryptBuilder.exe
+        id: locate
+        shell: powershell
+        run: |
+          $exe = Get-ChildItem -Recurse -Filter 'CatCryptBuilder.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) {
+            Write-Host "::error::CatCryptBuilder.exe not found in repo. Upload it to root or Releases."
+            exit 1
+          }
+          Write-Host "Found: $($exe.FullName) ($($exe.Length) bytes)"
+          "exe_path=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Run executable (with timeout)
+        shell: powershell
+        run: |
+          $exePath = '${{ steps.locate.outputs.exe_path }}'
+          $outFile = Join-Path $PWD 'stdout.txt'
+          $errFile = Join-Path $PWD 'stderr.txt'
+
+          Write-Host "Launching: $exePath"
+
+          $p = Start-Process -FilePath $exePath `
+                             -PassThru `
+                             -WindowStyle Hidden `
+                             -RedirectStandardOutput $outFile `
+                             -RedirectStandardError  $errFile
+
+          $exited = $p.WaitForExit(120000)  # 2 минуты
+
+          if (-not $exited) {
+            Write-Host "::warning::Process still running after 120s — likely GUI wait. Killing."
+            try { $p.Kill($true) } catch { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+            Start-Sleep -Seconds 2
+          } else {
+            Write-Host "Exit code: $($p.ExitCode)"
+          }
+
+          Write-Host "=== STDOUT ==="
+          if (Test-Path $outFile) { Get-Content $outFile -Raw } else { Write-Host "(empty)" }
+          Write-Host "=== STDERR ==="
+          if (Test-Path $errFile) { Get-Content $errFile -Raw } else { Write-Host "(empty)" }
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exe-run-logs
+          path: |
+            stdout.txt
+            stderr.txt
+          if-no-files-found: ignore
